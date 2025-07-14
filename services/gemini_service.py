@@ -10,28 +10,66 @@ class GeminiService:
 
     def __init__(self):
         self.model_name = "gemini-2.0-flash-exp"
-        self.system_prompt = """You are a helpful AI coding assistant similar to Claude. You can:
-- Help with coding problems and debugging
-- Explain code concepts and best practices
-- Write code in various programming languages
-- Review and improve existing code
-- Provide technical guidance and solutions
+        self.system_prompt = """You are Claude, an AI assistant created by Anthropic. You're a coding expert and helpful assistant.
 
-Be helpful, accurate, and provide clear explanations. When writing code, include comments and explain your reasoning."""
+Key traits:
+- Be helpful, harmless, and honest
+- Provide clear, accurate information
+- When writing code, explain it clearly
+- Use proper formatting for code blocks
+- Be concise but thorough"""
 
     def _convert_messages_to_gemini_format(
         self, messages: List[ChatMessage]
     ) -> List[dict]:
-        """Convert chat messages to Gemini API format"""
+        """Convert ChatMessage objects to Gemini API format"""
         gemini_messages = []
-
-        for msg in messages:
-            if msg.role == MessageRole.USER:
-                gemini_messages.append({"role": "user", "parts": [msg.content]})
-            elif msg.role == MessageRole.ASSISTANT:
-                gemini_messages.append({"role": "model", "parts": [msg.content]})
-
+        for message in messages:
+            role = "user" if message.role == MessageRole.USER else "model"
+            gemini_messages.append({"role": role, "parts": [message.content]})
         return gemini_messages
+
+    async def _simulate_smoother_streaming(
+        self, text: str
+    ) -> AsyncGenerator[str, None]:
+        """Break large chunks into smaller pieces for smoother streaming effect"""
+        if not text:
+            return
+
+        # Even more aggressive: stream word by word or character by character for code
+        if "```" in text or "def " in text or "import " in text:
+            # For code, be more granular
+            words = text.split(" ")
+            for word in words:
+                if word.strip():  # Skip empty words
+                    yield word + " "
+                    await asyncio.sleep(0.03)  # 30ms delay for code
+        else:
+            # For regular text, stream 1-2 words at a time
+            words = text.split(" ")
+            current_chunk = ""
+
+            for i, word in enumerate(words):
+                current_chunk += word
+
+                # Add space except for last word
+                if i < len(words) - 1:
+                    current_chunk += " "
+
+                # Yield after 1-2 words or at punctuation
+                if (
+                    len(current_chunk.split()) >= 1
+                    or any(
+                        char in word for char in [".", "!", "?", "\n", ":", ";", ","]
+                    )
+                    or i == len(words) - 1
+                ):
+
+                    yield current_chunk
+                    current_chunk = ""
+
+                    # Small delay for more natural streaming feel
+                    await asyncio.sleep(0.08)  # 80ms delay between chunks
 
     async def generate_response(
         self, user_message: str, conversation_history: List[ChatMessage] = None
@@ -67,7 +105,7 @@ Be helpful, accurate, and provide clear explanations. When writing code, include
     async def generate_streaming_response(
         self, user_message: str, conversation_history: List[ChatMessage] = None
     ) -> AsyncGenerator[str, None]:
-        """Generate a streaming response"""
+        """Generate a streaming response with enhanced smoothness"""
         try:
             model = genai.GenerativeModel(
                 self.model_name, system_instruction=self.system_prompt
@@ -91,9 +129,14 @@ Be helpful, accurate, and provide clear explanations. When writing code, include
                 stream=True,
             )
 
+            # Process each chunk from Gemini and break it down further
             for chunk in response:
                 if chunk.text:
-                    yield chunk.text
+                    # Break the chunk into smaller pieces for smoother streaming
+                    async for small_chunk in self._simulate_smoother_streaming(
+                        chunk.text
+                    ):
+                        yield small_chunk
 
         except Exception as e:
             yield f"Error: {str(e)}"
